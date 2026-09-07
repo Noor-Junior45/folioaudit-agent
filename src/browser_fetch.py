@@ -138,32 +138,40 @@ def download_via_browser(
                 title = a.get_attribute("title") or ""
                 combined = f"{href} {text} {title}".lower()
 
-                if any(ext in combined for ext in [".xlsx", ".xls", ".pdf"]):
-                    score = 0
+                has_ext = any(ext in combined for ext in [".xlsx", ".xls", ".pdf"])
+                has_portfolio_kw = any(kw in combined for kw in ["portfolio", "disclosure", "scheme", "holding", "factsheet", "monthly"])
+                # Exclude guides, brochures, notices, forms
+                is_irrelevant = any(bad in combined for bad in ["guide", "brochure", "notice", "kyc", "form", "newsletter"])
+
+                if has_ext and has_portfolio_kw and not is_irrelevant:
+                    score = 2
                     if ".xlsx" in combined or ".xls" in combined:
-                        score += 3
+                        score += 4
                     elif ".pdf" in combined:
                         score += 2
 
-                    if "monthly" in combined or "portfolio" in combined:
+                    if "portfolio" in combined:
+                        score += 3
+                    if "monthly" in combined:
                         score += 2
 
                     if tokens:
                         m_name = tokens.get("month", "").lower()
+                        mon = tokens.get("mon", "").lower()
                         y_val = tokens.get("year", "")
-                        if m_name and m_name in combined:
-                            score += 4
+                        if m_name and (m_name in combined or mon in combined):
+                            score += 10
                         if y_val and y_val in combined:
-                            score += 2
+                            score += 5
 
                     if score > best_score:
                         best_score = score
                         target_href = href
                         target_anchor = a
 
-            if target_href and best_score >= 2:
+            if target_href and best_score >= 5:
                 full_url = urljoin(portal_url, target_href)
-                print(f"[{amc_key}] found matching disclosure link on portal: {full_url}")
+                print(f"[{amc_key}] found matching disclosure link on portal: {full_url} (score={best_score})")
                 try:
                     # Attempt click to trigger download
                     with page.expect_download(timeout=12000):

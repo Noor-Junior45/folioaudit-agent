@@ -115,13 +115,17 @@ def get_reporting_period(year: int = None, month: int = None):
     """
     today = date.today()
     if year is None or month is None:
-        # Default to previous month
-        if today.month == 1:
-            r_year = today.year - 1
-            r_month = 12
-        else:
-            r_year = today.year
-            r_month = today.month - 1
+        # SEBI requires AMCs to publish monthly disclosures by the 15th of the following month.
+        # Before the 16th of the current month, previous month's data is not yet published.
+        # For example, on September 7, August data is not published yet; the latest published is July.
+        months_back = 1 if today.day >= 16 else 2
+        target_month = today.month - months_back
+        target_year = today.year
+        while target_month <= 0:
+            target_month += 12
+            target_year -= 1
+        r_year = target_year
+        r_month = target_month
     else:
         r_year = int(year)
         r_month = int(month)

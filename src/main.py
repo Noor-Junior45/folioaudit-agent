@@ -56,7 +56,7 @@ def run_for_amc(
         portal = cfg.get("portal_url", "")
         tokens = get_reporting_period(year=year, month=month)
 
-        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
             tmp_path = tmp.name
 
         downloaded = fetch.download_with_fallback(
@@ -89,6 +89,12 @@ def run_for_amc(
     # Auto-detect file format from magic bytes (ignores extension / Content-Type)
     detected_type = fetch.detect_file_type(local_path)
     print(f"[{amc_key}] detected file type: {detected_type}")
+
+    if detected_type == "unknown":
+        print(f"[{amc_key}] Warning: downloaded file is not an Excel or PDF file (likely HTML error page). Skipping.", file=sys.stderr)
+        if strict:
+            sys.exit(1)
+        return
 
     # openpyxl strictly checks file extension. Ensure local_path ends with the detected extension.
     if detected_type in ("xlsx", "pdf", "xls"):

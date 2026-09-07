@@ -67,9 +67,14 @@ def download_with_fallback(
     try:
         print(f"[{amc_key}] attempting direct download: {direct_url}")
         download_file(direct_url, dest_path, timeout=timeout)
-        if os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
-            print(f"[{amc_key}] direct download succeeded ({os.path.getsize(dest_path)} bytes)")
+        ftype = detect_file_type(dest_path)
+        if ftype in ("xlsx", "pdf", "xls") and os.path.exists(dest_path) and os.path.getsize(dest_path) > 1000:
+            print(f"[{amc_key}] direct download succeeded ({os.path.getsize(dest_path)} bytes, format: {ftype})")
             return dest_path
+        else:
+            print(f"[{amc_key}] direct download returned non-portfolio file (format: {ftype})")
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
     except Exception as e:
         print(f"[{amc_key}] direct download failed: {e}")
 
