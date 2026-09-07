@@ -42,3 +42,7 @@ package-lock.json
 *.swo
 .DS_Store
 Thumbs.db
+
+# Data & Large disclosures
+Monthly-Portfolio-Disclosure-July-2026/
+scripts/generated_sql/
