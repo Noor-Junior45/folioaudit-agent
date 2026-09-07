@@ -33,6 +33,8 @@ ENV/
 
 # Node / npm temporary artifacts
 node_modules/
+
+# lockfile should be tracked for reproducible installs
 package-lock.json
 
 # IDE & OS
