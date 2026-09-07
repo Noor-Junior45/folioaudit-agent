@@ -1,10 +1,17 @@
 """
 Entrypoint: python -m src.main --amc nippon_india
 
-For the named AMC: download the disclosure file, parse it with the
-deterministic parser, validate each fund's holdings, and write anything
-that passes to Supabase. Funds that fail validation are logged and skipped
-(not written) rather than silently accepted.
+For the named AMC: download the disclosure file, detect whether it is an
+Excel workbook or a PDF, parse it with the appropriate deterministic parser,
+validate each fund's holdings, and write anything that passes to Supabase.
+Funds that fail validation are logged and skipped (not written) rather than
+silently accepted.
+
+Supported file types
+--------------------
+  .xlsx / .xls — parsed by the AMC-specific parser (e.g. parse_nippon.py)
+  .pdf         — parsed by parse_pdf.py; falls back to LLM if deterministic
+                 extraction yields no results
 """
 import argparse
 import importlib
@@ -16,6 +23,14 @@ from dotenv import load_dotenv
 
 from src import db, fetch, validate
 from src.config import AMCS, resolve_disclosure_url
+
+
+def _select_parser(detected_type: str, cfg: dict):
+    """Return the appropriate parser module based on detected file type."""
+    if detected_type == "pdf":
+        return importlib.import_module("src.parse_pdf")
+    # xlsx / xls / unknown → use the AMC-configured parser
+    return importlib.import_module(f"src.{cfg['parser']}")
 
 
 def run_for_amc(
@@ -30,7 +45,6 @@ def run_for_amc(
         sys.exit(1)
 
     cfg = AMCS[amc_key]
-    parser_module = importlib.import_module(f"src.{cfg['parser']}")
 
     if file_path:
         local_path = file_path
@@ -38,29 +52,93 @@ def run_for_amc(
     else:
         url = disclosure_url or resolve_disclosure_url(amc_key, year=year, month=month)
         print(f"[{amc_key}] downloading {url}")
-        with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        # Use a suffix-less temp file; real type is detected from magic bytes.
+        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
             try:
                 fetch.download_file(url, tmp.name)
             except Exception as e:
                 print(f"[{amc_key}] download failed from {url}: {e}", file=sys.stderr)
                 portal = cfg.get("portal_url", "AMC website")
                 print(f"[{amc_key}] Visit statutory downloads portal: {portal}", file=sys.stderr)
-                print(f"[{amc_key}] Once downloaded, run with: python -m src.main --amc {amc_key} --file <path>", file=sys.stderr)
-                print(f"[{amc_key}] Or specify exact direct link: python -m src.main --amc {amc_key} --url <link>", file=sys.stderr)
+                print(
+                    f"[{amc_key}] Once downloaded, run with: "
+                    f"python -m src.main --amc {amc_key} --file <path>",
+                    file=sys.stderr,
+                )
+                print(
+                    f"[{amc_key}] Or specify exact direct link: "
+                    f"python -m src.main --amc {amc_key} --url <link>",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
             local_path = tmp.name
 
-    print(f"[{amc_key}] parsing (deterministic)")
+    # Auto-detect file format from magic bytes (ignores extension / Content-Type)
+    detected_type = fetch.detect_file_type(local_path)
+    print(f"[{amc_key}] detected file type: {detected_type}")
+
+    parser_module = _select_parser(detected_type, cfg)
+    print(f"[{amc_key}] parsing with {parser_module.__name__} (deterministic)")
+
     funds, stocks, holdings = parser_module.parse_workbook(local_path, amc_name=cfg["display_name"])
     print(f"[{amc_key}] parsed {len(funds)} funds, {len(stocks)} stocks, {len(holdings)} holding rows")
 
     if not funds:
-        print(f"[{amc_key}] deterministic parser found nothing — this is where "
-              f"the LLM fallback (src/llm_fallback.py) would be wired in per-sheet. "
-              f"Not auto-invoked here to avoid unbounded API spend without review.")
-        return
+        # --- LLM fallback ---
+        from src import llm_fallback
+        print(f"[{amc_key}] deterministic parser found nothing — attempting LLM fallback")
+        try:
+            if detected_type == "pdf":
+                raw_rows = parser_module.get_raw_rows_for_llm(local_path)
+            else:
+                # For Excel, get raw rows from the first sheet as a list-of-lists
+                import openpyxl
+                wb = openpyxl.load_workbook(local_path, read_only=True, data_only=True)
+                ws = wb.active
+                raw_rows = [list(r) for r in ws.iter_rows(values_only=True)]
 
-    # Group holdings by scheme_code for per-fund validation.
+            llm_results = llm_fallback.extract_holdings_via_llm(raw_rows)
+            print(f"[{amc_key}] LLM fallback extracted {len(llm_results)} holding rows")
+
+            if not llm_results:
+                print(f"[{amc_key}] LLM also returned nothing — skipping this AMC", file=sys.stderr)
+                return
+
+            # Build a single synthetic fund from LLM output
+            from src.config import get_reporting_period
+            period = get_reporting_period(year=year, month=month)
+            as_of_date = f"{period['year']}-{period['month_num']}-28"
+
+            scheme_code = f"{amc_key.upper()}_LLM"
+            fund = {
+                "scheme_code": scheme_code,
+                "name": cfg["display_name"] + " (LLM parsed)",
+                "amc": cfg["display_name"],
+                "fund_type": "mutual_fund",
+                "category": None,
+                "as_of_date": as_of_date,
+            }
+            funds = [fund]
+            for row in llm_results:
+                isin = row.get("isin", "")
+                if isin not in stocks:
+                    stocks[isin] = (row.get("name"), row.get("sector"))
+                holdings.append((
+                    scheme_code,
+                    isin,
+                    row.get("quantity"),
+                    row.get("market_value"),
+                    row.get("weight_pct"),
+                ))
+
+        except Exception as llm_err:
+            print(
+                f"[{amc_key}] LLM fallback failed: {llm_err} — skipping this AMC",
+                file=sys.stderr,
+            )
+            return
+
+    # Group holdings by scheme_code for per-fund validation
     holdings_by_scheme = defaultdict(list)
     for scheme_code, isin, qty, mv, wt in holdings:
         holdings_by_scheme[scheme_code].append((isin, qty, mv, wt))
@@ -99,12 +177,14 @@ def run_for_amc(
 
 if __name__ == "__main__":
     load_dotenv()
-    parser = argparse.ArgumentParser(description="FolioAudit AMC monthly portfolio disclosure scraper")
+    parser = argparse.ArgumentParser(
+        description="FolioAudit AMC monthly portfolio disclosure scraper"
+    )
     parser.add_argument("--amc", required=True, help=f"Key from AMCS dict: {list(AMCS)}")
-    parser.add_argument("--file", help="Optional local path to excel file (skips download)")
+    parser.add_argument("--file", help="Optional local path to Excel or PDF file (skips download)")
     parser.add_argument("--url", help="Optional override for direct disclosure file URL")
-    parser.add_argument("--year", type=int, help="Optional 4-digit year (e.g. 2025). Defaults to last reporting period.")
-    parser.add_argument("--month", type=int, help="Optional month number (1-12). Defaults to last reporting period.")
+    parser.add_argument("--year", type=int, help="Optional 4-digit year (e.g. 2025)")
+    parser.add_argument("--month", type=int, help="Optional month number (1-12)")
     args = parser.parse_args()
     run_for_amc(
         args.amc,
