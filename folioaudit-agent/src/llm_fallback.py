@@ -64,8 +64,12 @@ def extract_holdings_via_llm(rows: list) -> list:
 
     text = "".join(block.text for block in message.content if block.type == "text").strip()
     # Defensive: strip accidental code fences even though the prompt says not to.
+    # Use a line-based approach — str.strip("`") would also eat backticks inside
+    # JSON string values and corrupt the payload.
     if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:]
+        lines = text.splitlines()
+        # Drop the opening fence line (```json or ```) and closing fence line (```)
+        start = 1
+        end = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
+        text = "\n".join(lines[start:end]).strip()
     return json.loads(text)

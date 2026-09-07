@@ -50,7 +50,9 @@ def upsert_stocks(cur, stocks: dict):
         cur,
         """
         INSERT INTO stocks (isin, name, sector) VALUES %s
-        ON CONFLICT (isin) DO NOTHING
+        ON CONFLICT (isin) DO UPDATE
+          SET name   = EXCLUDED.name,
+              sector = EXCLUDED.sector
         """,
         rows,
     )
