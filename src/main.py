@@ -39,6 +39,7 @@ def run_for_amc(
     disclosure_url: str = None,
     year: int = None,
     month: int = None,
+    strict: bool = False,
 ):
     if amc_key not in AMCS:
         print(f"Unknown AMC key '{amc_key}'. Known: {list(AMCS)}", file=sys.stderr)
@@ -70,7 +71,10 @@ def run_for_amc(
                     f"python -m src.main --amc {amc_key} --url <link>",
                     file=sys.stderr,
                 )
-                sys.exit(1)
+                if strict:
+                    sys.exit(1)
+                print(f"[{amc_key}] Skipped: no file available at automated URL.", file=sys.stderr)
+                return
             local_path = tmp.name
 
     # Auto-detect file format from magic bytes (ignores extension / Content-Type)
@@ -185,6 +189,11 @@ if __name__ == "__main__":
     parser.add_argument("--url", help="Optional override for direct disclosure file URL")
     parser.add_argument("--year", type=int, help="Optional 4-digit year (e.g. 2025)")
     parser.add_argument("--month", type=int, help="Optional month number (1-12)")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit with non-zero error code if download fails",
+    )
     args = parser.parse_args()
     run_for_amc(
         args.amc,
@@ -192,4 +201,5 @@ if __name__ == "__main__":
         disclosure_url=args.url,
         year=args.year,
         month=args.month,
+        strict=args.strict,
     )
