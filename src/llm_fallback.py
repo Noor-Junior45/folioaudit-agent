@@ -4,21 +4,21 @@ parse_nippon.py) returns zero holdings for a fund, or validate.py flags an
 issue that suggests the file format changed.
 
 This is the "second agent" layer: instead of hardcoding a new parser the
-moment an AMC tweaks their spreadsheet layout, we hand the raw rows to
-Claude with a strict schema and let it find the right columns. This keeps
-routine monthly runs fast and free (deterministic path handles them) while
-still degrading gracefully instead of silently breaking when a format
-changes.
+moment an AMC tweaks their spreadsheet layout, we hand the raw rows to an
+LLM with a strict schema and let it find the right columns.
 
-Requires ANTHROPIC_API_KEY in the environment.
+Supported LLMs (auto-detected from environment keys, in priority order):
+  1. Google Gemini  — set GEMINI_API_KEY (free tier available at ai.google.dev)
+  2. Anthropic Claude — set ANTHROPIC_API_KEY (console.anthropic.com)
+
+At least one key must be present. If both are set, Gemini is used first.
 """
 import json
 import os
 
-import anthropic
-
-MODEL = "claude-sonnet-4-6"
-
+# ---------------------------------------------------------------------------
+# Shared system prompt — same instruction for both models
+# ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """You extract equity holdings from one sheet of a mutual \
 fund's SEBI-mandated monthly portfolio disclosure file. You will be given \
 raw spreadsheet rows as a JSON array of arrays.
@@ -36,40 +36,81 @@ column is a 0-1 fraction, multiply by 100). Only include rows with a \
 plausible Indian ISIN (starts with "IN", 12 characters)."""
 
 
-def extract_holdings_via_llm(rows: list) -> list:
-    """
-    rows: list of row tuples/lists as read from the sheet (values_only).
-    Returns a list of dicts matching the schema in SYSTEM_PROMPT, or raises
-    on API/parsing failure so the caller can decide how to handle it (e.g.
-    skip this fund for this run and flag it for manual review).
-    """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY not set; cannot use LLM fallback")
+def _strip_code_fences(text: str) -> str:
+    """Remove accidental ```json ... ``` fences without corrupting JSON content."""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        start = 1
+        end = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
+        text = "\n".join(lines[start:end]).strip()
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Gemini backend
+# ---------------------------------------------------------------------------
+def _extract_via_gemini(rows: list, api_key: str) -> list:
+    import google.generativeai as genai  # lazy import — only if key is set
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(
+        model_name="gemini-2.0-flash",
+        system_instruction=SYSTEM_PROMPT,
+    )
+    payload = json.dumps(rows, default=str)
+    response = model.generate_content(payload)
+    text = _strip_code_fences(response.text)
+    return json.loads(text)
+
+
+# ---------------------------------------------------------------------------
+# Claude (Anthropic) backend
+# ---------------------------------------------------------------------------
+def _extract_via_claude(rows: list, api_key: str) -> list:
+    import anthropic  # lazy import — only if key is set
 
     client = anthropic.Anthropic(api_key=api_key)
-
-    # Trim to a reasonable size — most sheets' equity sections are well
-    # under a few hundred rows; send everything and let the model find
-    # the right slice rather than trying to pre-locate it ourselves (that
-    # pre-location is exactly what failed and triggered this fallback).
     payload = json.dumps(rows, default=str)
-
     message = client.messages.create(
-        model=MODEL,
+        model="claude-sonnet-4-6",
         max_tokens=8000,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": payload}],
     )
-
-    text = "".join(block.text for block in message.content if block.type == "text").strip()
-    # Defensive: strip accidental code fences even though the prompt says not to.
-    # Use a line-based approach — str.strip("`") would also eat backticks inside
-    # JSON string values and corrupt the payload.
-    if text.startswith("```"):
-        lines = text.splitlines()
-        # Drop the opening fence line (```json or ```) and closing fence line (```)
-        start = 1
-        end = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
-        text = "\n".join(lines[start:end]).strip()
+    text = "".join(
+        block.text for block in message.content if block.type == "text"
+    ).strip()
+    text = _strip_code_fences(text)
     return json.loads(text)
+
+
+# ---------------------------------------------------------------------------
+# Public entry point — auto-selects available LLM
+# ---------------------------------------------------------------------------
+def extract_holdings_via_llm(rows: list) -> list:
+    """
+    rows: list of row tuples/lists as read from the sheet (values_only).
+    Returns a list of dicts matching the schema in SYSTEM_PROMPT, or raises
+    on API/parsing failure so the caller can skip this fund for this run.
+
+    Priority:
+      1. GEMINI_API_KEY   → uses Google Gemini 2.0 Flash (free tier available)
+      2. ANTHROPIC_API_KEY → uses Claude Sonnet
+      If neither is set, raises RuntimeError.
+    """
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    claude_key = os.environ.get("ANTHROPIC_API_KEY")
+
+    if gemini_key:
+        print("[llm_fallback] using Gemini 2.0 Flash")
+        return _extract_via_gemini(rows, gemini_key)
+
+    if claude_key:
+        print("[llm_fallback] using Claude Sonnet")
+        return _extract_via_claude(rows, claude_key)
+
+    raise RuntimeError(
+        "No LLM API key found. Set GEMINI_API_KEY (free: ai.google.dev) "
+        "or ANTHROPIC_API_KEY in your .env / GitHub Secrets."
+    )

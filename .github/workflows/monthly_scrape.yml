@@ -38,7 +38,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run agent for ${{ matrix.amc }}
+        continue-on-error: true   # a 404/download failure on one AMC won't fail the whole run
         env:
           SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || secrets.DATABASE_URL || secrets.NEON_DATABASE_URL }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}         # free at ai.google.dev
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional fallback
         run: python -m src.main --amc ${{ matrix.amc }}
