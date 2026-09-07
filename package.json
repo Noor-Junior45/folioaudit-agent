@@ -1,5 +1,15 @@
 {
+  "name": "folioaudit-agent",
+  "version": "0.1.0",
+  "description": "Automated Indian Mutual Fund monthly portfolio disclosure scraper and equity holding validator",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"No JS tests specified\" && exit 0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "@supabase/server": "^1.5.3"
+    "@supabase/supabase-js": "^2.48.0"
   }
 }
