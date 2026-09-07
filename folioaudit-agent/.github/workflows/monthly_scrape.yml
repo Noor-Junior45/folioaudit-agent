@@ -1,0 +1,43 @@
+name: Monthly AMC scrape
+
+on:
+  schedule:
+    # 03:00 UTC on the 10th of every month — most AMCs publish by then.
+    # Cron is UTC; adjust if you want a different local time.
+    - cron: "0 3 10 * *"
+  workflow_dispatch: {}  # allows manual "Run workflow" button in GitHub UI
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false  # one AMC failing shouldn't stop the others
+      matrix:
+        amc:
+          - sbi
+          - icici_pru
+          - hdfc
+          - nippon_india
+          - kotak
+          - aditya_birla
+          - uti
+          - axis
+          - mirae_asset
+          - dsp
+          - whiteoak
+          - motilal_oswal
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run agent for ${{ matrix.amc }}
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || secrets.DATABASE_URL || secrets.NEON_DATABASE_URL }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m src.main --amc ${{ matrix.amc }}
