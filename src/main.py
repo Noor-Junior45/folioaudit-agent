@@ -15,6 +15,7 @@ Supported file types
 """
 import argparse
 import importlib
+import os
 import sys
 import tempfile
 from collections import defaultdict
@@ -22,7 +23,7 @@ from collections import defaultdict
 from dotenv import load_dotenv
 
 from src import db, fetch, validate
-from src.config import AMCS, resolve_disclosure_url
+from src.config import AMCS, get_reporting_period, resolve_disclosure_url
 
 
 def _select_parser(detected_type: str, cfg: dict):
@@ -52,34 +53,53 @@ def run_for_amc(
         print(f"[{amc_key}] using local file: {local_path}")
     else:
         url = disclosure_url or resolve_disclosure_url(amc_key, year=year, month=month)
-        print(f"[{amc_key}] downloading {url}")
-        # Use a suffix-less temp file; real type is detected from magic bytes.
+        portal = cfg.get("portal_url", "")
+        tokens = get_reporting_period(year=year, month=month)
+
         with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
-            try:
-                fetch.download_file(url, tmp.name)
-            except Exception as e:
-                print(f"[{amc_key}] download failed from {url}: {e}", file=sys.stderr)
-                portal = cfg.get("portal_url", "AMC website")
-                print(f"[{amc_key}] Visit statutory downloads portal: {portal}", file=sys.stderr)
-                print(
-                    f"[{amc_key}] Once downloaded, run with: "
-                    f"python -m src.main --amc {amc_key} --file <path>",
-                    file=sys.stderr,
-                )
-                print(
-                    f"[{amc_key}] Or specify exact direct link: "
-                    f"python -m src.main --amc {amc_key} --url <link>",
-                    file=sys.stderr,
-                )
-                if strict:
-                    sys.exit(1)
-                print(f"[{amc_key}] Skipped: no file available at automated URL.", file=sys.stderr)
-                return
-            local_path = tmp.name
+            tmp_path = tmp.name
+
+        downloaded = fetch.download_with_fallback(
+            amc_key=amc_key,
+            direct_url=url,
+            portal_url=portal,
+            dest_path=tmp_path,
+            tokens=tokens,
+        )
+
+        if not downloaded:
+            print(f"[{amc_key}] Automated download failed from {url}", file=sys.stderr)
+            print(f"[{amc_key}] Visit statutory downloads portal: {portal}", file=sys.stderr)
+            print(
+                f"[{amc_key}] Once downloaded, run with: "
+                f"python -m src.main --amc {amc_key} --file <path>",
+                file=sys.stderr,
+            )
+            print(
+                f"[{amc_key}] Or specify exact direct link: "
+                f"python -m src.main --amc {amc_key} --url <link>",
+                file=sys.stderr,
+            )
+            if strict:
+                sys.exit(1)
+            print(f"[{amc_key}] Skipped: no file available at automated URL.", file=sys.stderr)
+            return
+        local_path = tmp_path
 
     # Auto-detect file format from magic bytes (ignores extension / Content-Type)
     detected_type = fetch.detect_file_type(local_path)
     print(f"[{amc_key}] detected file type: {detected_type}")
+
+    # openpyxl strictly checks file extension. Ensure local_path ends with the detected extension.
+    if detected_type in ("xlsx", "pdf", "xls"):
+        target_ext = f".{detected_type}"
+        if not local_path.lower().endswith(target_ext):
+            typed_path = f"{local_path}{target_ext}"
+            try:
+                os.replace(local_path, typed_path)
+                local_path = typed_path
+            except Exception:
+                pass
 
     parser_module = _select_parser(detected_type, cfg)
     print(f"[{amc_key}] parsing with {parser_module.__name__} (deterministic)")
@@ -109,7 +129,6 @@ def run_for_amc(
                 return
 
             # Build a single synthetic fund from LLM output
-            from src.config import get_reporting_period
             period = get_reporting_period(year=year, month=month)
             as_of_date = f"{period['year']}-{period['month_num']}-28"
 
