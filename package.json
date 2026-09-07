@@ -1,10 +1,12 @@
 {
   "name": "folioaudit-agent",
   "version": "0.1.0",
-  "description": "Automated Indian Mutual Fund monthly portfolio disclosure scraper and equity holding validator",
+  "description": "Automated Indian Mutual Fund monthly portfolio disclosure scraper and equity holding validator (Python-first project)",
   "type": "module",
   "scripts": {
-    "test": "echo \"No JS tests specified\" && exit 0"
+    "start": "echo \"This repository is primarily Python-based. No JS entrypoint defined.\" && exit 0",
+    "test": "echo \"No JS tests specified\" && exit 0",
+    "lint": "echo \"no-js-lint-configured\" && exit 0"
   },
   "engines": {
     "node": ">=18"
