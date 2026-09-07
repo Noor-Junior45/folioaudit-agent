@@ -2,9 +2,10 @@ name: Monthly AMC scrape
 
 on:
   schedule:
-    # 03:00 UTC on the 10th of every month — most AMCs publish by then.
-    # Cron is UTC; adjust if you want a different local time.
-    - cron: "0 3 10 * *"
+    # 03:00 UTC on the 16th of every month (= 08:30 IST on 16th).
+    # SEBI mandates AMCs publish by the 15th, so the 16th gives a full
+    # day buffer to ensure all files are live before we try to fetch them.
+    - cron: "0 3 16 * *"
   workflow_dispatch: {}  # allows manual "Run workflow" button in GitHub UI
 
 jobs:
