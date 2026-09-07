@@ -57,7 +57,8 @@ CREATE POLICY "Allow write access for postgres on holdings" ON holdings FOR ALL 
 
 -- View for Repo 2 (Frontend)
 -- Used when the frontend requests all funds with full stock holdings for comparison
-CREATE OR REPLACE VIEW fund_holdings_view AS
+CREATE OR REPLACE VIEW fund_holdings_view
+WITH (security_invoker = true) AS
 SELECT 
     f.id,
     f.name,
